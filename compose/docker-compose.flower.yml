@@ -1,0 +1,17 @@
+version: '3.4'
+
+services:
+
+  flower:
+    image: service
+    restart: on-failure
+    depends_on:
+      - rabbitmq
+    environment:
+      SERVICE_NAME: flower
+      APP_SETTINGS: service.config.Development
+    healthcheck:
+      test: curl -sf http://localhost:8000/api/workers
+    labels:
+      traefik.enable: true
+      traefik.http.routers.flower.rule: Host(`flower.localhost`)

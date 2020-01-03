@@ -1,0 +1,80 @@
+version: '3.4'
+
+services:
+
+  rabbitmq:
+    build:
+      context: ./../infra/rabbitmq
+    restart: on-failure
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: mypass
+    labels:
+      traefik.enable: true
+      traefik.http.routers.rabbitmq.rule: Host(`rabbitmq.localhost`)
+      traefik.http.services.rabbitmq.loadbalancer.server.port: 15672
+
+  postgres:
+    image: postgres
+    restart: on-failure
+    environment:
+      POSTGRES_PASSWORD: pass
+    healthcheck:
+      test: echo 'SELECT 1' | psql --user postgres --dbname postgres --quiet --no-align --tuples-only
+
+  cpu_worker:
+    image: service
+    restart: on-failure
+    depends_on:
+      - rabbitmq
+      - postgres
+    environment:
+      SERVICE_NAME: cpu-worker
+      APP_SETTINGS: service.config.Development
+    healthcheck:
+      test: celery inspect ping -b amqp://admin:mypass@rabbitmq:5672 -d cpu_worker@$$HOSTNAME
+
+  io_worker:
+    image: service
+    restart: on-failure
+    depends_on:
+      - rabbitmq
+      - postgres
+    environment:
+      SERVICE_NAME: io-worker
+      APP_SETTINGS: service.config.Development
+    healthcheck:
+      test: celery inspect ping -b amqp://admin:mypass@rabbitmq:5672 -d io_worker@$$HOSTNAME
+
+  api:
+    image: service
+    restart: on-failure
+    depends_on:
+      - rabbitmq
+      - postgres
+    environment:
+      SERVICE_NAME: api
+      APP_SETTINGS: service.config.Development
+    healthcheck:
+      test: curl -sf http://localhost:8000/service/api/v1/health
+    labels:
+      traefik.enable: true
+      traefik.http.routers.api.rule: PathPrefix(`/service`)
+
+  traefik:
+    image: traefik:v2.2.0
+    restart: on-failure
+    environment:
+      TRAEFIK_PING: "true"
+      TRAEFIK_LOG_LEVEL: "WARN"
+      TRAEFIK_API_INSECURE: "true"
+      TRAEFIK_PROVIDERS_DOCKER: "true"
+      TRAEFIK_PROVIDERS_DOCKER_EXPOSEDBYDEFAULT: "false"
+      TRAEFIK_ENTRYPOINTS_WEB_ADDRESS: ":80"
+    ports:
+      - 80:80
+      - 8080:8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: traefik healthcheck --ping

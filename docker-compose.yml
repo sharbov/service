@@ -1,0 +1,217 @@
+version: '3.4'
+
+x-logging:
+  &default-logging
+  driver: fluentd
+  options:
+    fluentd-address: localhost:24224
+
+services:
+
+  rabbitmq:
+    build:
+      context: infra/rabbitmq
+    restart: on-failure
+    depends_on:
+      - fluentd
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: mypass
+    labels:
+      traefik.enable: true
+      traefik.http.routers.rabbitmq.rule: Host(`rabbitmq.localhost`)
+      traefik.http.services.rabbitmq.loadbalancer.server.port: 15672
+    logging: *default-logging
+
+  postgres:
+    image: postgres
+    restart: on-failure
+    depends_on:
+      - fluentd
+    environment:
+      POSTGRES_PASSWORD: pass
+    healthcheck:
+      test: echo 'SELECT 1' | psql --user postgres --dbname postgres --quiet --no-align --tuples-only
+      interval: '5s'
+    logging: *default-logging
+
+  cpu_worker:
+    image: service
+    restart: on-failure
+    depends_on:
+      - rabbitmq
+      - postgres
+      - fluentd
+    environment:
+      SERVICE_NAME: cpu-worker
+      APP_SETTINGS: service.config.Development
+      METRICS_ENABLED: 1
+      TRACE_ENABLED: 1
+    healthcheck:
+      test: celery inspect ping -b amqp://admin:mypass@rabbitmq:5672 -d cpu_worker@$$HOSTNAME
+      interval: '5s'
+    logging: *default-logging
+
+  io_worker:
+    image: service
+    restart: on-failure
+    depends_on:
+      - rabbitmq
+      - postgres
+      - fluentd
+    environment:
+      SERVICE_NAME: io-worker
+      APP_SETTINGS: service.config.Development
+      METRICS_ENABLED: 1
+      TRACE_ENABLED: 1
+    healthcheck:
+      test: celery inspect ping -b amqp://admin:mypass@rabbitmq:5672 -d io_worker@$$HOSTNAME
+      interval: '5s'
+    logging: *default-logging
+
+  api:
+    image: service
+    restart: on-failure
+    depends_on:
+      - rabbitmq
+      - postgres
+      - fluentd
+    environment:
+      SERVICE_NAME: api
+      APP_SETTINGS: service.config.Development
+      METRICS_ENABLED: 1
+      TRACE_ENABLED: 1
+    healthcheck:
+      test: curl -sf http://localhost:8000/service/api/v1/health
+      interval: '5s'
+    labels:
+      traefik.enable: true
+      traefik.http.routers.api.rule: PathPrefix(`/service`)
+    logging: *default-logging
+
+  traefik:
+    image: traefik:v2.2.0
+    restart: on-failure
+    depends_on:
+      - fluentd
+    environment:
+      TRAEFIK_PING: "true"
+      TRAEFIK_LOG_LEVEL: "WARN"
+      TRAEFIK_API_INSECURE: "true"
+      TRAEFIK_PROVIDERS_DOCKER: "true"
+      TRAEFIK_PROVIDERS_DOCKER_EXPOSEDBYDEFAULT: "false"
+      TRAEFIK_ENTRYPOINTS_WEB_ADDRESS: ":80"
+      TRAEFIK_METRICS_PROMETHEUS: "true"
+      TRAEFIK_TRACING_JAEGER: "true"
+      TRAEFIK_TRACING_JAEGER_SAMPLINGTYPE: "const"
+      TRAEFIK_TRACING_JAEGER_COLLECTOR_ENDPOINT: "http://jaeger:14268/api/traces?format=jaeger.thrift"
+    ports:
+      - 80:80
+      - 8080:8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: traefik healthcheck --ping
+      interval: '5s'
+    logging: *default-logging
+
+  flower:
+    image: service
+    restart: on-failure
+    depends_on:
+      - rabbitmq
+    environment:
+      SERVICE_NAME: flower
+      APP_SETTINGS: service.config.Development
+    healthcheck:
+      test: curl -sf http://localhost:8000/api/workers
+      interval: '5s'
+    labels:
+      traefik.enable: true
+      traefik.http.routers.flower.rule: Host(`flower.localhost`)
+    logging: *default-logging
+
+  events_tracker:
+    image: service
+    restart: on-failure
+    depends_on:
+      - rabbitmq
+    environment:
+      SERVICE_NAME: events-tracker
+      APP_SETTINGS: service.config.Development
+    logging: *default-logging
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.17
+    depends_on:
+      - fluentd
+    labels:
+      traefik.enable: true
+      traefik.http.routers.jaeger.rule: Host(`jaeger.localhost`)
+      traefik.http.services.jaeger.loadbalancer.server.port: 16686
+    logging: *default-logging
+
+  statsd:
+    build:
+      context: infra/statsd
+    depends_on:
+      - fluentd
+    logging: *default-logging
+
+  prometheus:
+    build:
+      context: infra/prometheus
+    depends_on:
+      - statsd
+      - fluentd
+    labels:
+      traefik.enable: true
+      traefik.http.routers.prometheus.rule: Host(`prometheus.localhost`)
+    logging: *default-logging
+
+  grafana:
+    build:
+      context: infra/grafana
+    environment:
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ADMIN_PASSWORD: "pass"
+    depends_on:
+      - prometheus
+      - fluentd
+    labels:
+      traefik.enable: true
+      traefik.http.routers.grafana.rule: Host(`grafana.localhost`)
+    logging: *default-logging
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.4.2
+    environment:
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+    healthcheck:
+      test: curl -sf http://localhost:5601
+      interval: '5s'
+    labels:
+      traefik.enable: true
+      traefik.http.routers.kibana.rule: Host(`kibana.localhost`)
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.4.2
+    environment:
+      discovery.type: single-node
+    healthcheck:
+      test: curl -sf http://localhost:9200
+      interval: '5s'
+    labels:
+      traefik.enable: true
+      traefik.http.routers.elasticsearch.rule: Host(`elasticsearch.localhost`)
+
+  fluentd:
+    build: infra/fluentd
+    ports:
+      - "24224:24224"
+      - "24224:24224/udp"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: 100m
+        max-file: "5"

@@ -1,0 +1,99 @@
+version: '3.3'
+
+services:
+
+  broker:
+    image: rabbitmq:3-management
+    restart: on-failure
+    healthcheck:
+      test: rabbitmq-diagnostics -q check_running
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=mypass
+    labels:
+      traefik.enable: true
+      traefik.http.routers.queue.rule: Host(`broker.localhost`)
+      traefik.http.services.queue.loadbalancer.server.port: 15672
+
+  database:
+    image: postgres
+    restart: on-failure
+    environment:
+      POSTGRES_PASSWORD: pass
+    healthcheck:
+      test: echo 'SELECT 1' | psql --user postgres --dbname postgres --quiet --no-align --tuples-only
+
+  monitor:
+    image: service
+    restart: on-failure
+    depends_on:
+      - broker
+    environment:
+      SERVICE_NAME: monitor
+      APP_SETTINGS: service.config.Development
+    healthcheck:
+      test: curl -sf http://localhost:8000/api/workers
+    labels:
+      traefik.enable: true
+      traefik.http.routers.monitor.rule: Host(`monitor.localhost`)
+
+  cpu_worker:
+    image: service
+    restart: on-failure
+    depends_on:
+      - broker
+      - database
+    environment:
+      SERVICE_NAME: cpu-worker
+      APP_SETTINGS: service.config.Development
+
+  io_worker:
+    image: service
+    restart: on-failure
+    depends_on:
+      - broker
+      - database
+    environment:
+      SERVICE_NAME: io-worker
+      APP_SETTINGS: service.config.Development
+
+  api:
+    image: service
+    restart: on-failure
+    depends_on:
+      - broker
+      - database
+    environment:
+      #DEBUG: 1
+      SERVICE_NAME: api
+      APP_SETTINGS: service.config.Development
+    healthcheck:
+      test: curl -sf http://localhost:8000/service/api/v1/health
+    labels:
+      traefik.enable: true
+      traefik.http.routers.api.rule: PathPrefix(`/service`)
+
+  reverse-proxy:
+    image: traefik:v2.2.0
+    restart: on-failure
+    command:
+      - "--ping=true"
+      - "--log.level=INFO"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+      - "--providers.docker.exposedbydefault=false"
+    ports:
+      - 80:80
+      - 8080:8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: traefik healthcheck --ping
+
+  tracer:
+    image: jaegertracing/all-in-one:1.17
+    labels:
+      traefik.enable: true
+      traefik.http.routers.jaeger.rule: Host(`tracer.localhost`)
+      traefik.http.services.jaeger.loadbalancer.server.port: 16686

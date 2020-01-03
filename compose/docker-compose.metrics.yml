@@ -1,0 +1,54 @@
+version: '3.4'
+
+services:
+
+  cpu_worker:
+    environment:
+      METRICS_ENABLED: 1
+
+  io_worker:
+    environment:
+      METRICS_ENABLED: 1
+
+  api:
+    environment:
+      METRICS_ENABLED: 1
+
+  traefik:
+    environment:
+      TRAEFIK_METRICS_PROMETHEUS: "true"
+
+  events_tracker:
+    image: service
+    restart: on-failure
+    depends_on:
+      - rabbitmq
+      - statsd
+    environment:
+      SERVICE_NAME: events-tracker
+      APP_SETTINGS: service.config.Development
+
+  statsd:
+    build:
+      context: ./../infra/statsd
+
+  prometheus:
+    build:
+      context: ./../infra/prometheus
+    depends_on:
+      - statsd
+    labels:
+      traefik.enable: true
+      traefik.http.routers.prometheus.rule: Host(`prometheus.localhost`)
+
+  grafana:
+    build:
+      context: ./../infra/grafana
+    environment:
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ADMIN_PASSWORD: "pass"
+    depends_on:
+      - prometheus
+    labels:
+      traefik.enable: true
+      traefik.http.routers.grafana.rule: Host(`grafana.localhost`)

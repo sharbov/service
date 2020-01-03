@@ -1,0 +1,28 @@
+version: '3.4'
+
+services:
+
+  cpu_worker:
+    environment:
+      TRACE_ENABLED: 1
+
+  io_worker:
+    environment:
+      TRACE_ENABLED: 1
+
+  api:
+    environment:
+      TRACE_ENABLED: 1
+
+  traefik:
+    environment:
+      TRAEFIK_TRACING_JAEGER: "true"
+      TRAEFIK_TRACING_JAEGER_SAMPLINGTYPE: "const"
+      TRAEFIK_TRACING_JAEGER_COLLECTOR_ENDPOINT: "http://jaeger:14268/api/traces?format=jaeger.thrift"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.17
+    labels:
+      traefik.enable: true
+      traefik.http.routers.jaeger.rule: Host(`jaeger.localhost`)
+      traefik.http.services.jaeger.loadbalancer.server.port: 16686
