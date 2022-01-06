@@ -9,7 +9,7 @@ sqlalchemy-utils==0.36.1
 gevent==1.4.0
 greenlet==0.4.15
 kombu==4.6.7
-celery==4.4.0
+celery==5.2.2
 retry==0.9.2
 flower==0.9.4
 jaeger_client==4.3.0
