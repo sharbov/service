@@ -1,6 +1,6 @@
 connexion[swagger-ui]==2.6.0
 typing==3.7.4.1
-setuptools==44.0.0
+setuptools==65.5.1
 flask-sqlalchemy==2.4.1
 gunicorn==20.0.4
 psycopg2-binary==2.8.4
